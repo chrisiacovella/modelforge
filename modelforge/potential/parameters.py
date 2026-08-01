@@ -83,6 +83,11 @@ class ActivationFunctionName(CaseInsensitiveEnum):
     ELU = "ELU"
 
 
+class ChargeEquilibrationScheme(CaseInsensitiveEnum):
+    default = "default"
+    fukui = "fukui"
+
+
 # this enum will tell us if we need to pass additional parameters to the activation function
 class ActivationFunctionParamsEnum(CaseInsensitiveEnum):
     ReLU = "None"
@@ -230,6 +235,53 @@ class PostProcessingParameter(ParametersBase):
 
 
 class AimNet2Parameters(ParametersBase):
+    class CoreParameter(CoreParameterBase):
+        number_of_radial_basis_functions: int
+        # note maximum interaction radius should be passed as a string with units or unit.Quantity;
+        # it will be converted to float in appropriate unit system
+        maximum_interaction_radius: float
+        number_of_interaction_modules: int
+        interaction_module_hidden_layers: List[
+            List[int]
+        ]  # for each interaction module, a list of the sizes of the hidden layers
+        output_module_hidden_layers: List[int]
+        activation_function_parameter: ActivationFunctionConfig
+        featurization: Featurization
+        predicted_properties: List[str]
+        predicted_dim: List[int]
+        number_of_vector_features: int
+        charge_equilibration_scheme: ChargeEquilibrationScheme = (
+            ChargeEquilibrationScheme.default
+        )
+        converted_units = field_validator("maximum_interaction_radius", mode="before")(
+            _convert_str_or_unit_to_unit_length
+        )
+
+        # validator to ensure that the size of the interaction_module_hidden_layers matches number of interaction modules
+        @model_validator(mode="after")
+        def validate_interaction_module_hidden_layers(self):
+            if (
+                len(self.interaction_module_hidden_layers)
+                != self.number_of_interaction_modules
+            ):
+                raise ValueError(
+                    "The length of 'interaction_module_hidden_layers' list must match 'number_of_interaction_modules'."
+                )
+            for layer_sizes in self.interaction_module_hidden_layers:
+                if len(layer_sizes) < 1:
+                    raise ValueError(
+                        "Each interaction module must have at least one size defined."
+                    )
+            return self
+
+    potential_name: str = "AimNet2"
+    only_unique_pairs: bool = False
+    core_parameter: CoreParameter
+    postprocessing_parameter: PostProcessingParameter
+    potential_seed: Optional[int] = None
+
+
+class AimNet2SRParameters(ParametersBase):
     class CoreParameter(CoreParameterBase):
         number_of_radial_basis_functions: int
         # note maximum interaction radius should be passed as a string with units or unit.Quantity;

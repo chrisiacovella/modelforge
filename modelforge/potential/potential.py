@@ -28,6 +28,7 @@ from modelforge.dataset.dataset import DatasetParameters
 from modelforge.utils.prop import NNPInput
 from modelforge.potential.parameters import (
     AimNet2Parameters,
+    AimNet2SRParameters,
     ANI2xParameters,
     PaiNNParameters,
     PhysNetParameters,
@@ -47,6 +48,7 @@ T_NNP_Parameters = TypeVar(
     PaiNNParameters,
     TensorNetParameters,
     AimNet2Parameters,
+    AimNet2SRParameters,
 )
 
 
