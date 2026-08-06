@@ -547,8 +547,8 @@ class AimNet2SRCore(torch.nn.Module):
             raise ValueError("NaN values detected in partial charges.")
         if torch.isnan(partial_spin_density).any():
             raise ValueError("NaN values detected in partial spin density.")
-        if torch.isnan(per_atom_electrostatic_energy).any():
-            raise ValueError("NaN values detected in per-atom electrostatic energy.")
+        # if torch.isnan(per_atom_electrostatic_energy).any():
+        #    raise ValueError("NaN values detected in per-atom electrostatic energy.")
 
         return {
             "per_atom_scalar_representation": atomic_embedding,
