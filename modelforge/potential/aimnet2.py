@@ -13,7 +13,8 @@ from modelforge.potential.neighbors import PairlistData
 class FukuiEquilibration(nn.Module):
     """
     Equilibrates per-atom charge to match per-system target totals, using learnable, atom-wise Fukui weights
-    rather than a uniform correction.
+    rather than a uniform correction.  This is adapted from MACE Polar, but is fundamentally the same as
+    aiminet2-NSE approach
 
     Parameters
     ----------
