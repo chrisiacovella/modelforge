@@ -2113,6 +2113,7 @@ class PotentialTrainer:
                 if self.runtime_parameter.checkpoint_path != "None"
                 else None
             ),  # NOTE: automatically resumes training from checkpoint
+            weights_only=False
         )
 
         self.trainer.validate(
