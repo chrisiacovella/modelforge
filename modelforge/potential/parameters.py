@@ -287,6 +287,7 @@ class AimNet2SRParameters(ParametersBase):
         # note maximum interaction radius should be passed as a string with units or unit.Quantity;
         # it will be converted to float in appropriate unit system
         maximum_interaction_radius: float
+        electrostatic_maximum_interaction_radius: float
         number_of_interaction_modules: int
         interaction_module_hidden_layers: List[
             List[int]
@@ -297,9 +298,11 @@ class AimNet2SRParameters(ParametersBase):
         predicted_properties: List[str]
         predicted_dim: List[int]
         number_of_vector_features: int
-        converted_units = field_validator("maximum_interaction_radius", mode="before")(
-            _convert_str_or_unit_to_unit_length
-        )
+        converted_units = field_validator(
+            "maximum_interaction_radius",
+            "electrostatic_maximum_interaction_radius",
+            mode="before",
+        )(_convert_str_or_unit_to_unit_length)
 
         # validator to ensure that the size of the interaction_module_hidden_layers matches number of interaction modules
         @model_validator(mode="after")

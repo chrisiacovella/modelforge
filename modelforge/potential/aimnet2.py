@@ -162,7 +162,7 @@ class AimNet2Core(torch.nn.Module):
         super().__init__()
 
         log.debug("Initializing the AimNet2 architecture.")
-
+        self.model_name = "aimnet2"
         self.activation_function = activation_function_parameter["activation_function"]
 
         # Initialize representation block
@@ -333,7 +333,7 @@ class AimNet2Core(torch.nn.Module):
             Contains input data for the batch obtained directly from the
             dataset, including atomic numbers, positions, and other relevant
             fields.
-        pairlist_output : PairListOutputs
+        pairlist_output : PairListData
             Contains the indices for the selected pairs and their associated
             distances and displacement vectors.
 

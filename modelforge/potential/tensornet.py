@@ -248,6 +248,8 @@ class TensorNetCore(torch.nn.Module):
 
         from modelforge.utils.misc import seed_random_number
 
+        log.debug("Initializing the tensornet architecture.")
+        self.model_name = "tensornet"
         if potential_seed != -1:
             seed_random_number(potential_seed)
 

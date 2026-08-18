@@ -8,6 +8,7 @@ from modelforge.potential.utils import Dense
 
 from modelforge.dataset.dataset import NNPInput
 from modelforge.potential.neighbors import PairlistData
+
 import math
 
 
@@ -121,9 +122,10 @@ class FukuiEquilibration(nn.Module):
 
 
 def spin_resolved_gaussian_smeared_potential(
-    positions: torch.Tensor,
+    d_ij: torch.Tensor,
+    idx: torch.Tensor,
+    n_atoms: int,
     density: torch.Tensor,
-    atomic_subsystem_indices: torch.Tensor,
     sigma: float,
 ) -> torch.Tensor:
     """
@@ -131,9 +133,10 @@ def spin_resolved_gaussian_smeared_potential(
 
     Parameters
     ----------
-    positions : (n_atoms, 3) atomic positions
+    d_ij : (n_atoms, 1) euclidian distance between interaction pairs
+    idx : (n_atoms, 2) indices of interaction pairs
+    n_atoms: number of atoms
     density : (n_atoms, 1) monopole density ( p_up or p_down)
-    atomic_subsystem_indices : (n_atoms,)
     sigma : Gaussian smearing width
 
     Returns
@@ -143,31 +146,14 @@ def spin_resolved_gaussian_smeared_potential(
     (l=0) term, including the self-interaction contribution.
     """
 
-    n_atoms = positions.shape[0]
-
-    #### calculate all the pairs
-    # I think it would likely  be better to use the neighborlist with the electrostatic cutoff to be more efficient
-    # but would require some refactoring to pass the container of the multiple neighborlists.
-    # For now, will use the inefficient calculation and will refactor later.
-    d_ij = positions.unsqueeze(0) - positions.unsqueeze(1)  # (N, N, 3)
-    r = torch.linalg.norm(
-        d_ij, dim=-1
-    )  # (N, N); zero on the diagonal, as those are the self interactions
-
-    eye = torch.eye(n_atoms, dtype=torch.bool, device=positions.device)
-    same_system = atomic_subsystem_indices.unsqueeze(
-        0
-    ) == atomic_subsystem_indices.unsqueeze(1)
-    pair_mask = same_system & (~eye)
-
-    # Apply the mask to the displacement vector
-    r_masked = torch.where(pair_mask, r, torch.ones_like(r))
+    idx_i = idx[0]
+    idx_j = idx[1]
 
     # equation 37: monopole part of the sum in eqn 35
-    kernel = torch.erf(r_masked / (math.sqrt(2.0) * sigma)) / r_masked
-    kernel = kernel * pair_mask.to(kernel.dtype)
+    kernel = torch.erf(d_ij / (math.sqrt(2.0) * sigma)) / d_ij
+    pairwise_potential = torch.zeros(n_atoms, 1, device=density.device)
 
-    pairwise_potential = kernel @ density  # (N, 1)
+    pairwise_potential.scatter_add_(0, idx_i.unsqueeze(-1), kernel * density[idx_j])
 
     # we need to calculate what happens for r=0, i.e., self interactions
     # analytical limit for r->0 of the erf function above is  erf(r / (sqrt(2) sigma)) / r
@@ -228,8 +214,10 @@ class LongRangeElectrostaticUpdate(nn.Module):
         atomic_embedding: torch.Tensor,
         p_up: torch.Tensor,
         p_down: torch.Tensor,
-        positions: torch.Tensor,
+        d_ij: torch.Tensor,
+        idx: torch.Tensor,
         atomic_subsystem_indices: torch.Tensor,
+        n_atoms: int,
         per_system_total_charge: torch.Tensor,
         per_system_spin_multiplicity: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -237,10 +225,10 @@ class LongRangeElectrostaticUpdate(nn.Module):
         # First handle the non-local electrostatic features (Eqs. 16-17)
 
         v_up = spin_resolved_gaussian_smeared_potential(
-            positions, p_up, atomic_subsystem_indices, self.smearing_width
+            d_ij, idx, n_atoms, p_up, self.smearing_width
         )
         v_down = spin_resolved_gaussian_smeared_potential(
-            positions, p_down, atomic_subsystem_indices, self.smearing_width
+            d_ij, idx, n_atoms, p_down, self.smearing_width
         )
 
         # predict an additive update + new Fukui weights (Eqs. 18-24).
@@ -295,12 +283,13 @@ class AimNet2SRCore(torch.nn.Module):
         maximum_interaction_radius: float,
         number_of_long_range_updates: int = 2,
         electrostatic_smearing_width: float = 0.1,
+        electrostatic_maximum_interaction_radius=15.0,  # note this isn't used directly
     ) -> None:
         """
         Core architecture of the AimNet2SR (spin-resolved) model for molecular property
         prediction.
 
-        This incoportates ideas from MACE-Polar
+        This incorporates ideas from MACE-Polar regarding spin resolved charge density and long range updates.
 
         Parameters
         ----------
@@ -336,8 +325,8 @@ class AimNet2SRCore(torch.nn.Module):
 
         super().__init__()
 
-        log.debug("Initializing the AimNet2SR (spin-resolved Fukui)  architecture.")
-
+        log.debug("Initializing the AimNet2_SR (spin-resolved Fukui)  architecture.")
+        self.model_name = "aimnet2_sr"
         self.activation_function = activation_function_parameter["activation_function"]
 
         # Initialize representation block
@@ -407,6 +396,7 @@ class AimNet2SRCore(torch.nn.Module):
         self,
         data: NNPInput,
         pairlist: PairlistData,
+        electrostatic_pairlist: PairlistData,
     ) -> Dict[str, torch.Tensor]:
         """
         Calculate the requested properties for a given input batch.
@@ -416,7 +406,9 @@ class AimNet2SRCore(torch.nn.Module):
         data : NNPInput
             The input data for the model.
         pairlist: PairlistData
-            The output from the pairlist module.
+            The output from the neighborlist module associated with the "local" cutoff.
+        electrostatic_pairlist: PairlistData
+            The output from the neighborlist module associated with the "electrostatic" cutoff.
         Returns
         -------
         Dict[str, torch.Tensor]
@@ -440,6 +432,7 @@ class AimNet2SRCore(torch.nn.Module):
         gv = u_ij.unsqueeze(-1) * gs.unsqueeze(1)  # Broadcasting over G
 
         # Atomic embedding "a" Eqn. (3)
+
         p_up = torch.zeros(
             (atomic_embedding.shape[0], 1), device=atomic_embedding.device
         )
@@ -505,14 +498,19 @@ class AimNet2SRCore(torch.nn.Module):
         atomic_subsystem_indices = data.atomic_subsystem_indices.to(dtype=torch.int64)
 
         # stage 2 is the non-local polarizable field updates
-        positions = data.positions
+        d_ij = electrostatic_pairlist.d_ij
+        idx = electrostatic_pairlist.pair_indices
+
+        n_atoms = data.positions.shape[0]
         for lr_update in self.long_range_updates:
             p_up, p_down, _, _ = lr_update(
                 atomic_embedding,
                 p_up,
                 p_down,
-                positions,
+                d_ij,
+                idx,
                 atomic_subsystem_indices,
+                n_atoms,
                 per_system_total_charge,
                 per_system_spin_multiplicity,
             )
@@ -534,9 +532,10 @@ class AimNet2SRCore(torch.nn.Module):
             0.5
             * partial_charges
             * spin_resolved_gaussian_smeared_potential(
-                positions,
+                d_ij,
+                idx,
+                n_atoms,
                 partial_charges,
-                atomic_subsystem_indices,
                 self.electrostatic_smearing_width,
             )
         )
@@ -565,6 +564,7 @@ class AimNet2SRCore(torch.nn.Module):
         self,
         data: NNPInput,
         pairlist_output: PairlistData,
+        electrostatic_pairlist_output: PairlistData,
     ) -> Dict[str, torch.Tensor]:
         """
         Implements the forward pass through the network.
@@ -575,9 +575,13 @@ class AimNet2SRCore(torch.nn.Module):
             Contains input data for the batch obtained directly from the
             dataset, including atomic numbers, positions, and other relevant
             fields.
-        pairlist_output : PairListOutputs
+        pairlist_output : PairListData
             Contains the indices for the selected pairs and their associated
             distances and displacement vectors.
+        electrostatic_pairlist_output: PairListData
+            Contains the indices for the selected pairs and their associated
+            distances and displacement vectors associated with the electrostatic cutoff
+
 
         Returns
         -------
@@ -586,7 +590,9 @@ class AimNet2SRCore(torch.nn.Module):
             forward pass.
         """
         # perform the forward pass implemented in the subclass
-        results = self.compute_properties(data, pairlist_output)
+        results = self.compute_properties(
+            data, pairlist_output, electrostatic_pairlist_output
+        )
         atomic_embedding = results["per_atom_scalar_representation"]
 
         # The way this is setup, we will always return per_atom_charge and per_atom_spin_density
