@@ -220,10 +220,10 @@ def test_forward(single_batch_with_batchsize, prep_temp_dir, dataset_temp_dir):
             [0.8241],
             [0.7865],
             [1.4623],
-            [1.2626]]
+            [1.2626],
+        ]
     )
 
-    print(y_hat["per_system_energy"])
     assert torch.allclose(y_hat["per_system_energy"], ref_per_system_energy, atol=1e-3)
 
 
@@ -254,8 +254,10 @@ def test_mlp_initialization():
     assert interaction.mlp[1].in_features == hidden_layers[0]
     assert interaction.mlp[1].out_features == hidden_layers[1]
     assert interaction.mlp[2].in_features == hidden_layers[1]
-    assert interaction.mlp[2].out_features == num_per_atom_features + 3 # we have the 2 channels for charge, so this is
-                                                                        # 3 rather than 2 as in normal aimnet2
+    assert (
+        interaction.mlp[2].out_features == num_per_atom_features + 3
+    )  # we have the 2 channels for charge, so this is
+    # 3 rather than 2 as in normal aimnet2
 
     num_per_atom_features = 128
     number_of_vector_features = 8
@@ -286,9 +288,10 @@ def test_mlp_initialization():
     assert interaction.mlp[2].in_features == hidden_layers[1]
     assert interaction.mlp[2].out_features == hidden_layers[2]
     assert interaction.mlp[3].in_features == hidden_layers[2]
-    assert interaction.mlp[3].out_features == num_per_atom_features +  3 # we have the 2 channels for charge, so this is
-                                                                        # 3 rather than 2 as in normal aimnet2
-
+    assert (
+        interaction.mlp[3].out_features == num_per_atom_features + 3
+    )  # we have the 2 channels for charge, so this is
+    # 3 rather than 2 as in normal aimnet2
 
 
 def test_mlp_init():
