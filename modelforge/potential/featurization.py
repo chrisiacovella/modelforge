@@ -91,7 +91,6 @@ class GroupPeriodEmbedding(nn.Module):
                     for atomic_number in atomic_numbers
                 ]
             )
-            print("period: ", value, self.embedding_tensor(value))
         return torch.cat(
             (per_atom_property_tensor, self.embedding_tensor(value)), dim=1
         )

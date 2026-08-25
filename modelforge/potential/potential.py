@@ -355,7 +355,8 @@ class Potential(torch.nn.Module):
 
         super().__init__()
 
-        self.core_network = torch.jit.script(core_network) if jit else core_network
+        self.core_network = core_network
+        # self.core_network = torch.jit.script(core_network) if jit else core_network
         self.neighborlist = (
             torch.jit.script(neighborlist) if jit_neighborlist else neighborlist
         )
@@ -800,14 +801,16 @@ def setup_potential(
     # if we have the spin resolved aimnet2, this will calculate electrostatics as part of it
     # and will use the appropriate neighborlist
     electrostatic_only_unique_pairs = True
-log.debug(f"Model type: {model_type}")
+    log.debug(f"Model type: {model_type}")
     if model_type.lower() == "aimnet2_sr":
         electrostatic_only_unique_pairs = False
         electrostatic_cutoff = (
             potential_parameter.core_parameter.electrostatic_maximum_interaction_radius
         )
         use_electrostatic_cutoff = True
-        log.debug("you are here")
+        log.debug(
+            "aimnnet2_sr detected,; configuration electrostatic neighborlist settings"
+        )
 
     if use_training_mode_neighborlist:
         from modelforge.potential.neighbors import NeighborListForTraining

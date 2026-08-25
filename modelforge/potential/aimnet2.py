@@ -2,6 +2,8 @@ from typing import Dict, List, Tuple
 
 import torch
 import torch.nn as nn
+from torch import Tensor
+
 from loguru import logger as log
 
 from modelforge.potential.utils import Dense
@@ -14,7 +16,7 @@ class FukuiEquilibration(nn.Module):
     """
     Equilibrates per-atom charge to match per-system target totals, using learnable, atom-wise Fukui weights
     rather than a uniform correction.  This is adapted from MACE Polar, but is fundamentally the same as
-    aiminet2-NSE approach
+    aimnet2-NSE approach, but applied to a single channel
 
     Parameters
     ----------
@@ -356,12 +358,6 @@ class AimNet2Core(torch.nn.Module):
             results[output_name] = output
 
         return results
-
-
-import torch
-import torch.nn as nn
-from torch import Tensor
-from typing import Tuple
 
 
 def mlp_init(

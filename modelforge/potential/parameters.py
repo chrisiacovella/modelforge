@@ -321,7 +321,7 @@ class AimNet2SRParameters(ParametersBase):
                     )
             return self
 
-    potential_name: str = "AimNet2"
+    potential_name: str = "AimNet2_sr"
     only_unique_pairs: bool = False
     core_parameter: CoreParameter
     postprocessing_parameter: PostProcessingParameter

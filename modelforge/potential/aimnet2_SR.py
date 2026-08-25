@@ -2,6 +2,8 @@ from typing import Dict, List, Tuple
 
 import torch
 import torch.nn as nn
+from torch import Tensor
+
 from loguru import logger as log
 
 from modelforge.potential.utils import Dense
@@ -151,7 +153,9 @@ def spin_resolved_gaussian_smeared_potential(
 
     # equation 37: monopole part of the sum in eqn 35
     kernel = torch.erf(d_ij / (math.sqrt(2.0) * sigma)) / d_ij
-    pairwise_potential = torch.zeros(n_atoms, 1, device=density.device)
+    pairwise_potential = torch.zeros(
+        n_atoms, 1, device=density.device, dtype=density.dtype
+    )
 
     pairwise_potential.scatter_add_(0, idx_i.unsqueeze(-1), kernel * density[idx_j])
 
@@ -604,12 +608,6 @@ class AimNet2SRCore(torch.nn.Module):
             results[output_name] = output
 
         return results
-
-
-import torch
-import torch.nn as nn
-from torch import Tensor
-from typing import Tuple
 
 
 def mlp_init(

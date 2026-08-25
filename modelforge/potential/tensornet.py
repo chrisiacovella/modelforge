@@ -11,6 +11,7 @@ from modelforge.potential import CosineAttenuationFunction, TensorNetRadialBasis
 
 from modelforge.utils.prop import NNPInput
 from modelforge.potential.neighbors import PairlistData
+from loguru import logger as log
 
 
 class DenseAndSum(nn.Module):
