@@ -800,7 +800,7 @@ def setup_potential(
     # if we have the spin resolved aimnet2, this will calculate electrostatics as part of it
     # and will use the appropriate neighborlist
     electrostatic_only_unique_pairs = True
-    print(model_type)
+log.debug(f"Model type: {model_type}")
     if model_type.lower() == "aimnet2_sr":
         electrostatic_only_unique_pairs = False
         electrostatic_cutoff = (
