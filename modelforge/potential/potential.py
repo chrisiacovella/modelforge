@@ -357,9 +357,11 @@ class Potential(torch.nn.Module):
 
         self.core_network = core_network
         # self.core_network = torch.jit.script(core_network) if jit else core_network
-        self.neighborlist = (
-            torch.jit.script(neighborlist) if jit_neighborlist else neighborlist
-        )
+        # self.neighborlist = (
+        #    torch.jit.script(neighborlist) if jit_neighborlist else neighborlist
+        # )
+        self.neighborlist = neighborlist
+
         # note cannot jit compile the dispersion interactions as tad-dftd3 is not compatible with torchscript
         if "per_system_vdw_energy" in postprocessing._registered_properties:
             # double check if nvalchemiops works with JIT
