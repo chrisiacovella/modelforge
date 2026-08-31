@@ -635,7 +635,15 @@ class Potential(torch.nn.Module):
         pairlist_output = self.neighborlist.forward(input_data)
 
         # Step 2: Compute the core network output
-        return self.core_network.forward(input_data, pairlist_output.local_cutoff)
+        if self.core_network.model_name == "aimnet2_sr":
+            core_output = self.core_network.forward(
+                input_data,
+                pairlist_output.local_cutoff,
+                pairlist_output.electrostatic_cutoff,
+            )
+            return core_output
+        else:
+            return self.core_network.forward(input_data, pairlist_output.local_cutoff)
 
     def load_state_dict(
         self,
