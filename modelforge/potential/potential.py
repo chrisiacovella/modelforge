@@ -28,6 +28,7 @@ from modelforge.dataset.dataset import DatasetParameters
 from modelforge.utils.prop import NNPInput
 from modelforge.potential.parameters import (
     AimNet2Parameters,
+    AimNet2SRParameters,
     ANI2xParameters,
     PaiNNParameters,
     PhysNetParameters,
@@ -47,6 +48,7 @@ T_NNP_Parameters = TypeVar(
     PaiNNParameters,
     TensorNetParameters,
     AimNet2Parameters,
+    AimNet2SRParameters,
 )
 
 
@@ -353,10 +355,13 @@ class Potential(torch.nn.Module):
 
         super().__init__()
 
-        self.core_network = torch.jit.script(core_network) if jit else core_network
-        self.neighborlist = (
-            torch.jit.script(neighborlist) if jit_neighborlist else neighborlist
-        )
+        self.core_network = core_network
+        # self.core_network = torch.jit.script(core_network) if jit else core_network
+        # self.neighborlist = (
+        #    torch.jit.script(neighborlist) if jit_neighborlist else neighborlist
+        # )
+        self.neighborlist = neighborlist
+
         # note cannot jit compile the dispersion interactions as tad-dftd3 is not compatible with torchscript
         if "per_system_vdw_energy" in postprocessing._registered_properties:
             # double check if nvalchemiops works with JIT
@@ -583,9 +588,17 @@ class Potential(torch.nn.Module):
         pairlist_output = self.neighborlist.forward(input_data)
 
         # Step 2: Compute the core network output
-        core_output = self.core_network.forward(
-            input_data, pairlist_output.local_cutoff
-        )
+        if self.core_network.model_name == "aimnet2_sr":
+            core_output = self.core_network.forward(
+                input_data,
+                pairlist_output.local_cutoff,
+                pairlist_output.electrostatic_cutoff,
+            )
+        else:
+            core_output = self.core_network.forward(
+                input_data,
+                pairlist_output.local_cutoff,
+            )
 
         # Step 3: Apply postprocessing using PostProcessing
         core_output = self._add_total_charge(core_output, input_data)
@@ -622,7 +635,15 @@ class Potential(torch.nn.Module):
         pairlist_output = self.neighborlist.forward(input_data)
 
         # Step 2: Compute the core network output
-        return self.core_network.forward(input_data, pairlist_output.local_cutoff)
+        if self.core_network.model_name == "aimnet2_sr":
+            core_output = self.core_network.forward(
+                input_data,
+                pairlist_output.local_cutoff,
+                pairlist_output.electrostatic_cutoff,
+            )
+            return core_output
+        else:
+            return self.core_network.forward(input_data, pairlist_output.local_cutoff)
 
     def load_state_dict(
         self,
@@ -787,6 +808,20 @@ def setup_potential(
     log.debug(
         f"Cutoffs: local_cutoff={local_cutoff}, vdw_cutoff={vdw_cutoff}, electrostatic_cutoff={electrostatic_cutoff}"
     )
+    # if we have the spin resolved aimnet2, this will calculate electrostatics as part of it
+    # and will use the appropriate neighborlist
+    electrostatic_only_unique_pairs = True
+    log.debug(f"Model type: {model_type}")
+    if model_type.lower() == "aimnet2_sr":
+        electrostatic_only_unique_pairs = False
+        electrostatic_cutoff = (
+            potential_parameter.core_parameter.electrostatic_maximum_interaction_radius
+        )
+        use_electrostatic_cutoff = True
+        log.debug(
+            "aimnnet2_sr detected,; configuration electrostatic neighborlist settings"
+        )
+
     if use_training_mode_neighborlist:
         from modelforge.potential.neighbors import NeighborListForTraining
 
@@ -797,7 +832,9 @@ def setup_potential(
             local_only_unique_pairs=only_unique_pairs,
             use_vdw_cutoff=use_vdw_cutoff,
             use_electrostatic_cutoff=use_electrostatic_cutoff,
+            electrostatic_only_unique_pairs=electrostatic_only_unique_pairs,
         )
+        log.debug(f"yo yo elecrostatic cutoff: {electrostatic_cutoff}")
     else:
         from modelforge.potential.neighbors import OrthogonalDisplacementFunction
 
@@ -813,6 +850,7 @@ def setup_potential(
             local_only_unique_pairs=only_unique_pairs,
             use_vdw_cutoff=use_vdw_cutoff,
             use_electrostatic_cutoff=use_electrostatic_cutoff,
+            electrostatic_only_unique_pairs=electrostatic_only_unique_pairs,
         )
         # we can set the strategy here before passing this to the Potential
         # this can still be modified later using Potential.set_neighborlist_strategy before it has bit JITTED

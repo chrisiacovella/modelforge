@@ -11,32 +11,30 @@ from modelforge.potential.utils import Dense
 from modelforge.dataset.dataset import NNPInput
 from modelforge.potential.neighbors import PairlistData
 
+import math
+
 
 class FukuiEquilibration(nn.Module):
     """
-    Equilibrates per-atom charge to match per-system target totals, using learnable, atom-wise Fukui weights
-    rather than a uniform correction.  This is adapted from MACE Polar, but is fundamentally the same as
-    aimnet2-NSE approach, but applied to a single channel
+    Learns per-atom, per-channel Fukui weights and uses them to equilibrate the spin-up / spin-down monopole channels
 
     Parameters
-    ----------
+    ---------
     number_of_per_atom_features : int
-        Dimensionality of the atomic embedding used to predict the Fukui
-        weights.
-    hidden_dim : int
-        Hidden layer size of the small Fukui-weight-predicting MLP.
+        Number of features per atom in the input embedding.
+    hidden_dim : int, optional
+        Number of hidden units in the MLP used to predict Fukui weights. Default is 32.
     """
 
     def __init__(self, number_of_per_atom_features: int, hidden_dim: int = 32):
         super().__init__()
-        # Predicts  non-negative "softness" weights per atom
         self.fukui_mlp = nn.Sequential(
             Dense(
                 number_of_per_atom_features,
                 hidden_dim,
                 activation_function=nn.SiLU(),
             ),
-            Dense(hidden_dim, 1),
+            Dense(hidden_dim, 2),
         )
         self.softplus = nn.Softplus()
 
@@ -46,75 +44,234 @@ class FukuiEquilibration(nn.Module):
         atomic_subsystem_indices: torch.Tensor,
         n_systems: int,
     ) -> torch.Tensor:
+
+        # initialize an array of zeros for each system
         out = torch.zeros(
             n_systems, values.shape[-1], device=values.device, dtype=values.dtype
         )
+
+        # sum them up
         out.index_add_(0, atomic_subsystem_indices, values)
         return out
 
-    def forward(
-        self,
-        atomic_embedding: torch.Tensor,
-        per_atom_charge: torch.Tensor,
+    @staticmethod
+    def equilibrate_channel(
+        p: torch.Tensor,
+        f_raw: torch.Tensor,
+        target: torch.Tensor,
         atomic_subsystem_indices: torch.Tensor,
-        per_system_total_charge: torch.Tensor,
-    ) -> Dict[str, torch.Tensor]:
+        n_systems: int,
+    ) -> torch.Tensor:
         """
-         Parameters
-         ----------
-         atomic_embedding : (n_atoms, F) -- used to predict Fukui weights
-         per_atom_charge : (n_atoms, 1)
-         per_system_total_charge : (n_systems, 1)
-         atomic_subsystem_indices : (n_atoms,)
+        Core Fukui-equilibration operation.
 
-         Returns
-         -------
-        dictionary containing "per_atom_charge"
+        Parameters
+        ----------
+        p : (n_atoms, 1) current per-atom monopole values for this channel
+        f_raw : (n_atoms, 1) non-negative, un-normalized Fukui weights for
+            this channel
+        target : (n_systems, 1) target per-system sum for this channel
         """
+        sums = FukuiEquilibration._per_system_sum(
+            f_raw, atomic_subsystem_indices, n_systems
+        )
+        f_norm = f_raw / sums[atomic_subsystem_indices].clamp_min(1e-8)
 
-        device = atomic_embedding.device
+        p_sum = FukuiEquilibration._per_system_sum(
+            p, atomic_subsystem_indices, n_systems
+        )
+        residual = target - p_sum
+
+        # distribute the extra charge based on the normalized weights
+        return p + f_norm * residual[atomic_subsystem_indices]
+
+    def forward(self, inputs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """
+        Predicts Fukui weights from local atomic features only, then equilibrates both channels.
+        """
+        atomic_embedding = inputs["atomic_embedding"]
+        p_up = inputs["per_atom_charge_up"]
+        p_down = inputs["per_atom_charge_down"]
+        atomic_subsystem_indices = inputs["atomic_subsystem_indices"]
+        per_system_total_charge = inputs["per_system_total_charge"]
+        per_system_spin_multiplicity = inputs["per_system_spin_multiplicity"]
+
         n_systems = (
             int(atomic_subsystem_indices.max().item()) + 1
             if atomic_subsystem_indices.numel() > 0
             else 0
         )
-
-        # Non-negative, per-atom Fukui weights for each channel.
+        # we want to make sure that we only have positive values so wrap with a soft plus
         raw_weights = self.softplus(self.fukui_mlp(atomic_embedding)) + 1e-6
-        w_q = raw_weights[:, 0:1]
+        f_up_raw, f_down_raw = raw_weights[:, 0:1], raw_weights[:, 1:2]
 
-        # Normalize per system so each channel's weights form a partition
-        # of unity over the atoms of that system (a proper Fukui function).
-        def _normalize(weights: torch.Tensor) -> torch.Tensor:
-            sums = self._per_system_sum(weights, atomic_subsystem_indices, n_systems)
-            sums = sums[atomic_subsystem_indices]
-            return weights / sums.clamp_min(1e-8)
+        Q = per_system_total_charge.reshape(-1, 1).to(p_up.dtype)
+        S = per_system_spin_multiplicity.reshape(-1, 1).to(p_up.dtype) - 1.0
+        target_up = 0.5 * (Q + S)
+        target_down = 0.5 * (Q - S)
 
-        f_q = _normalize(w_q)
-
-        # Current per-system totals of the predicted populations.
-        q_sum = self._per_system_sum(
-            per_atom_charge, atomic_subsystem_indices, n_systems
+        corrected_up = self.equilibrate_channel(
+            p_up, f_up_raw, target_up, atomic_subsystem_indices, n_systems
+        )
+        corrected_down = self.equilibrate_channel(
+            p_down, f_down_raw, target_down, atomic_subsystem_indices, n_systems
         )
 
-        target_charge = per_system_total_charge.reshape(-1, 1).to(per_atom_charge.dtype)
-
-        # q_l = q_{l-1} + f_q * (Q_target - Q_pred).
-        # Here, Q is the total per system charge, and q is the partial charge.
-        # f_q is the learned matrix that distributes the difference between
-        # the labeled total charge and the predicted total charge to all atoms in the system
-
-        residual_q = target_charge - q_sum
-
-        # Redistribute residuals according to the *learned* Fukui weights
-        # instead of uniformly across all atoms.
-
-        corrected_charge = per_atom_charge + f_q * residual_q[atomic_subsystem_indices]
-
-        return {"per_atom_charge": corrected_charge}
+        return {
+            "per_atom_charge_up": corrected_up,
+            "per_atom_charge_down": corrected_down,
+        }
 
 
-class AimNet2Core(torch.nn.Module):
+def spin_resolved_gaussian_smeared_potential(
+    d_ij: torch.Tensor,
+    idx: torch.Tensor,
+    n_atoms: int,
+    density: torch.Tensor,
+    sigma: float,
+) -> torch.Tensor:
+    """
+    This corresponds to eqn 16 in mace polar computing the spin resolved electrostatic potential.
+
+    Parameters
+    ----------
+    d_ij : (n_atoms, 1) euclidian distance between interaction pairs
+    idx : (n_atoms, 2) indices of interaction pairs
+    n_atoms: number of atoms
+    density : (n_atoms, 1) monopole density ( p_up or p_down)
+    sigma : Gaussian smearing width
+
+    Returns
+    -------
+    (n_atoms, 1) electrostatic potential generated by `density` at
+    every atom, evaluated via Eq. 16-17 restricted to the monopole
+    (l=0) term, including the self-interaction contribution.
+    """
+
+    idx_i = idx[0]
+    idx_j = idx[1]
+
+    # equation 37: monopole part of the sum in eqn 35
+    kernel = torch.erf(d_ij / (math.sqrt(2.0) * sigma)) / d_ij
+    pairwise_potential = torch.zeros(
+        n_atoms, 1, device=density.device, dtype=density.dtype
+    )
+
+    pairwise_potential.scatter_add_(0, idx_i.unsqueeze(-1), kernel * density[idx_j])
+
+    # we need to calculate what happens for r=0, i.e., self interactions
+    # analytical limit for r->0 of the erf function above is  erf(r / (sqrt(2) sigma)) / r
+    # paper suggests an "offset of 0.02 Angstroms" to avoid singularities, but we can just use the analytical limit instead
+    # to avoid another cutoff masking, I think.
+    self_coefficient = math.sqrt(2.0 / math.pi) / sigma
+    self_term = self_coefficient * density
+
+    return pairwise_potential + self_term
+
+
+class LongRangeElectrostaticUpdate(nn.Module):
+    """
+
+    This module will perform the non-local updates.
+
+    The init will construct the MLP that will take in the local atomic features, the current p_up and p_down,
+    and the non-local potentials v_up and v_down they generate (Eqn. 19's embedding of non-local + local + current-density information).
+    Forward function will perform the updates to p_up and p_down  and the up and down potentials.
+
+
+    """
+
+    def __init__(
+        self,
+        number_of_per_atom_features: int,
+        electrostatic_smearing_width: float,
+        hidden_dim: int = 64,
+    ):
+        """
+
+        Parameters
+        ----------
+        number_of_per_atom_features : int
+            Number of features per atom.
+        electrostatic_smearing_width : float
+            Width of the electrostatic smearing.
+        hidden_dim : int, optional
+            Dimension of the hidden layers in the MLP, by default 64.
+        """
+        super().__init__()
+        self.smearing_width = electrostatic_smearing_width
+
+        self.update_nonlocal_mlp = nn.Sequential(
+            Dense(
+                number_of_per_atom_features + 4,
+                hidden_dim,
+                activation_function=nn.SiLU(),
+            ),
+            Dense(hidden_dim, hidden_dim, activation_function=nn.SiLU()),
+            Dense(hidden_dim, 4),  # add 4 for delta_p_up, delta_p_down, f_up, f_down
+        )
+
+        self.softplus = nn.Softplus()
+
+    def forward(
+        self,
+        atomic_embedding: torch.Tensor,
+        p_up: torch.Tensor,
+        p_down: torch.Tensor,
+        d_ij: torch.Tensor,
+        idx: torch.Tensor,
+        atomic_subsystem_indices: torch.Tensor,
+        n_atoms: int,
+        per_system_total_charge: torch.Tensor,
+        per_system_spin_multiplicity: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+
+        # First handle the non-local electrostatic features (Eqs. 16-17)
+
+        v_up = spin_resolved_gaussian_smeared_potential(
+            d_ij, idx, n_atoms, p_up, self.smearing_width
+        )
+        v_down = spin_resolved_gaussian_smeared_potential(
+            d_ij, idx, n_atoms, p_down, self.smearing_width
+        )
+
+        # predict an additive update + new Fukui weights (Eqs. 18-24).
+        # we will create a tensor that is the atomic embedding, p_up, p_down, v_up, and v_down
+        features = torch.cat([atomic_embedding, p_up, p_down, v_up, v_down], dim=1)
+        out = self.update_nonlocal_mlp(features)
+        delta_p_up, delta_p_down, f_up_raw, f_down_raw = torch.split(
+            out, [1, 1, 1, 1], dim=1
+        )
+        # make sure all positive
+        f_up_raw = self.softplus(f_up_raw) + 1e-6
+        f_down_raw = self.softplus(f_down_raw) + 1e-6
+
+        # unequilibrated p_up p_down
+        p_up_tilde = p_up + delta_p_up
+        p_down_tilde = p_down + delta_p_down
+
+        # Equilibrate the channels to recorrect
+        n_systems = (
+            int(atomic_subsystem_indices.max().item()) + 1
+            if atomic_subsystem_indices.numel() > 0
+            else 0
+        )
+        Q = per_system_total_charge.reshape(-1, 1).to(p_up.dtype)
+        S = per_system_spin_multiplicity.reshape(-1, 1).to(p_up.dtype) - 1.0
+        target_up = 0.5 * (Q + S)
+        target_down = 0.5 * (Q - S)
+
+        p_up_new = FukuiEquilibration.equilibrate_channel(
+            p_up_tilde, f_up_raw, target_up, atomic_subsystem_indices, n_systems
+        )
+        p_down_new = FukuiEquilibration.equilibrate_channel(
+            p_down_tilde, f_down_raw, target_down, atomic_subsystem_indices, n_systems
+        )
+
+        return p_up_new, p_down_new, v_up, v_down
+
+
+class AimNet2SRCore(torch.nn.Module):
 
     def __init__(
         self,
@@ -128,11 +285,15 @@ class AimNet2Core(torch.nn.Module):
         predicted_properties: List[str],
         predicted_dim: List[int],
         maximum_interaction_radius: float,
-        charge_equilibration_scheme: str,
+        number_of_long_range_updates: int = 2,
+        electrostatic_smearing_width: float = 0.1,
+        electrostatic_maximum_interaction_radius=15.0,  # note this isn't used directly
     ) -> None:
         """
-        Core architecture of the AimNet2 model for molecular property
+        Core architecture of the AimNet2SR (spin-resolved) model for molecular property
         prediction.
+
+        This incorporates ideas from MACE-Polar regarding spin resolved charge density and long range updates.
 
         Parameters
         ----------
@@ -163,18 +324,17 @@ class AimNet2Core(torch.nn.Module):
             The dimensionality of each predicted property.
         maximum_interaction_radius : float
             The cutoff radius for atomic interactions in the model.
-        charge_equilibration_scheme : str
-            The scheme used for charge equilibration in the model, which can "default" or "fukui"
+
         """
 
         super().__init__()
 
-        log.debug("Initializing the AimNet2 architecture.")
-        self.model_name = "aimnet2"
+        log.debug("Initializing the AimNet2_SR (spin-resolved Fukui)  architecture.")
+        self.model_name = "aimnet2_sr"
         self.activation_function = activation_function_parameter["activation_function"]
 
         # Initialize representation block
-        self.representation_module = AIMNet2Representation(
+        self.representation_module = AimNet2SRRepresentation(
             maximum_interaction_radius,
             number_of_radial_basis_functions,
             featurization_config=featurization,
@@ -190,12 +350,11 @@ class AimNet2Core(torch.nn.Module):
                 number_of_vector_features,  # H
             )
         )
-        # shape(nr_of_angular_symmetry_functions,nr_of_radial_symmetry_functions,nr_of_vector_features)
 
         # Define interaction modules for message passing
         self.interaction_modules = torch.nn.ModuleList(
             [
-                AIMNet2InteractionModule(
+                AimNet2SRInteractionModule(
                     number_of_per_atom_features=number_of_per_atom_features,
                     number_of_radial_basis_functions=number_of_radial_basis_functions,
                     number_of_vector_features=number_of_vector_features,
@@ -215,21 +374,33 @@ class AimNet2Core(torch.nn.Module):
                 activation_function=self.activation_function,
                 hidden_layers=output_module_hidden_layers,
             )
-        self.charge_equilibration_scheme = charge_equilibration_scheme
 
-        if self.charge_equilibration_scheme == "default":
-            from modelforge.potential.processing import ChargeConservation
+        self.fukui_equilibration = FukuiEquilibration(
+            number_of_per_atom_features=number_of_per_atom_features
+        )
 
-            self.charge_conservation = ChargeConservation()
-        elif self.charge_equilibration_scheme == "fukui":
-            self.fukui_equilibration = FukuiEquilibration(
-                number_of_per_atom_features, 32
-            )
+        # non-local long-range polarizable field updates.
+        self.electrostatic_smearing_width = electrostatic_smearing_width
+        self.long_range_updates = torch.nn.ModuleList(
+            [
+                LongRangeElectrostaticUpdate(
+                    number_of_per_atom_features=number_of_per_atom_features,
+                    electrostatic_smearing_width=electrostatic_smearing_width,
+                )
+                for _ in range(number_of_long_range_updates)
+            ]
+        )
+
+        # from modelforge.potential.processing import CoulombPotential
+
+        # note this will need to change when we switch to supporting multiple cutoffs
+        # self.coulomb_potential = CoulombPotential(cutoff=maximum_interaction_radius)
 
     def compute_properties(
         self,
         data: NNPInput,
         pairlist: PairlistData,
+        electrostatic_pairlist: PairlistData,
     ) -> Dict[str, torch.Tensor]:
         """
         Calculate the requested properties for a given input batch.
@@ -239,7 +410,9 @@ class AimNet2Core(torch.nn.Module):
         data : NNPInput
             The input data for the model.
         pairlist: PairlistData
-            The output from the pairlist module.
+            The output from the neighborlist module associated with the "local" cutoff.
+        electrostatic_pairlist: PairlistData
+            The output from the neighborlist module associated with the "electrostatic" cutoff.
         Returns
         -------
         Dict[str, torch.Tensor]
@@ -263,16 +436,30 @@ class AimNet2Core(torch.nn.Module):
         gv = u_ij.unsqueeze(-1) * gs.unsqueeze(1)  # Broadcasting over G
 
         # Atomic embedding "a" Eqn. (3)
-        partial_charges = torch.zeros(
+
+        p_up = torch.zeros(
             (atomic_embedding.shape[0], 1), device=atomic_embedding.device
         )
+        p_down = torch.zeros(
+            (atomic_embedding.shape[0], 1), device=atomic_embedding.device
+        )
+
+        per_system_spin_multiplicity = getattr(
+            data, "per_system_spin_multiplicity", None
+        )
+        if per_system_spin_multiplicity is None:
+            n_systems = int(data.atomic_subsystem_indices.max().item()) + 1
+            per_system_spin_multiplicity = torch.ones(
+                (n_systems, 1), device=atomic_embedding.device, dtype=torch.float32
+            )
 
         # Perform message passing using interaction modules
         for i, interaction in enumerate(self.interaction_modules):
 
-            delta_a, delta_q, f = interaction(
+            delta_a, delta_p_up, delta_p_down, f = interaction(
                 atomic_embedding,
-                partial_charges,
+                p_up,
+                p_down,
                 pairlist.pair_indices,
                 gs,
                 gv,
@@ -282,55 +469,106 @@ class AimNet2Core(torch.nn.Module):
             # Update atomic embeddings
             atomic_embedding = atomic_embedding + delta_a
 
-            # Apply scaling factor `f` to `delta_q`
-            scaled_delta_q = f * delta_q
+            scaled_delta_up = f * delta_p_up
+            scaled_delta_down = f * delta_p_down
 
             # Update partial charges
             if i == 0:
-                partial_charges = scaled_delta_q  # Initialize charges
+                p_up = scaled_delta_up
+                p_down = scaled_delta_down
             else:
-                partial_charges = partial_charges + scaled_delta_q  # Incremental update
+                p_up = p_up + scaled_delta_up
+                p_down = p_down + scaled_delta_down
 
-            if self.charge_equilibration_scheme == "default":
-                partial_charges = self.charge_conservation(
-                    {
-                        "per_atom_charge": partial_charges,
-                        "per_system_total_charge": data.per_system_total_charge.to(
-                            dtype=torch.float32
-                        ),
-                        "atomic_subsystem_indices": data.atomic_subsystem_indices.to(
-                            dtype=torch.int64
-                        ),
-                    }
-                )["per_atom_charge"]
-            elif self.charge_equilibration_scheme == "fukui":
-                partial_charges = self.fukui_equilibration(
-                    atomic_embedding=atomic_embedding,
-                    per_atom_charge=partial_charges,
-                    atomic_subsystem_indices=data.atomic_subsystem_indices.to(
-                        dtype=torch.int64
-                    ),
-                    per_system_total_charge=data.per_system_total_charge.to(
-                        dtype=torch.float32
-                    ),
-                )["per_atom_charge"]
-        # check that none of the tensors are NaN
+        # according to the MACE polar paper, we just do the equilibration after we go through each of layers
+        equilibrated = self.fukui_equilibration(
+            {
+                "atomic_embedding": atomic_embedding,
+                "per_atom_charge_up": p_up,
+                "per_atom_charge_down": p_down,
+                "per_system_total_charge": data.per_system_total_charge.to(
+                    dtype=torch.float32
+                ),
+                "per_system_spin_multiplicity": per_system_spin_multiplicity,
+                "atomic_subsystem_indices": data.atomic_subsystem_indices.to(
+                    dtype=torch.int64
+                ),
+            }
+        )
+        p_up = equilibrated["per_atom_charge_up"]
+        p_down = equilibrated["per_atom_charge_down"]
+
+        per_system_total_charge = data.per_system_total_charge.to(dtype=torch.float32)
+        atomic_subsystem_indices = data.atomic_subsystem_indices.to(dtype=torch.int64)
+
+        # stage 2 is the non-local polarizable field updates
+        d_ij = electrostatic_pairlist.d_ij
+        idx = electrostatic_pairlist.pair_indices
+
+        n_atoms = data.positions.shape[0]
+        for lr_update in self.long_range_updates:
+            p_up, p_down, _, _ = lr_update(
+                atomic_embedding,
+                p_up,
+                p_down,
+                d_ij,
+                idx,
+                atomic_subsystem_indices,
+                n_atoms,
+                per_system_total_charge,
+                per_system_spin_multiplicity,
+            )
+
+        # now use the updated p_up and p_down to get partial charges and partial spin density
+        partial_charges = p_up + p_down
+        partial_spin_density = p_up - p_down
+
+        """
+        Per-atom contribution to E_Hartree = 1/2 sum_ij p_i p_j T_ij
+        (Eq. 35, monopole part), i.e. 0.5 * rho_i * v_i(rho), including the
+        self-energy term. Summing this over all atoms in a system gives
+        that system's non-local electrostatic ("Hartree") energy.
+        
+        # since this is just based upon partial charges at this point, can just implement this as 
+        # a post processing option, similar to normal coulombic potential
+        """
+        per_atom_electrostatic_energy = (
+            0.5
+            * partial_charges
+            * spin_resolved_gaussian_smeared_potential(
+                d_ij,
+                idx,
+                n_atoms,
+                partial_charges,
+                self.electrostatic_smearing_width,
+            )
+        )
+
         if torch.isnan(atomic_embedding).any():
             raise ValueError("NaN values detected in atomic embeddings.")
         if torch.isnan(partial_charges).any():
             raise ValueError("NaN values detected in partial charges.")
+        if torch.isnan(partial_spin_density).any():
+            raise ValueError("NaN values detected in partial spin density.")
+        # if torch.isnan(per_atom_electrostatic_energy).any():
+        #    raise ValueError("NaN values detected in per-atom electrostatic energy.")
 
         return {
             "per_atom_scalar_representation": atomic_embedding,
             "atomic_subsystem_indices": data.atomic_subsystem_indices,
             "atomic_numbers": data.atomic_numbers,
             "per_atom_charge": partial_charges,
+            "per_atom_electrostatic_energy": per_atom_electrostatic_energy,
+            "per_atom_spin_density": partial_spin_density,
+            "per_atom_charge_up": p_up,  # note sure we need to return this, but will for debugging now
+            "per_atom_charge_down": p_down,
         }
 
     def forward(
         self,
         data: NNPInput,
         pairlist_output: PairlistData,
+        electrostatic_pairlist_output: PairlistData,
     ) -> Dict[str, torch.Tensor]:
         """
         Implements the forward pass through the network.
@@ -344,6 +582,10 @@ class AimNet2Core(torch.nn.Module):
         pairlist_output : PairListData
             Contains the indices for the selected pairs and their associated
             distances and displacement vectors.
+        electrostatic_pairlist_output: PairListData
+            Contains the indices for the selected pairs and their associated
+            distances and displacement vectors associated with the electrostatic cutoff
+
 
         Returns
         -------
@@ -352,10 +594,12 @@ class AimNet2Core(torch.nn.Module):
             forward pass.
         """
         # perform the forward pass implemented in the subclass
-        results = self.compute_properties(data, pairlist_output)
+        results = self.compute_properties(
+            data, pairlist_output, electrostatic_pairlist_output
+        )
         atomic_embedding = results["per_atom_scalar_representation"]
 
-        # The way this is setup, we will always return per_atom_charge and electrostatic_energy
+        # The way this is setup, we will always return per_atom_charge and per_atom_spin_density
         # as those come directly from the compute_properties method.
 
         # Compute all specified outputs
@@ -421,7 +665,7 @@ def mlp_init(
     return mlp
 
 
-class AIMNet2InteractionModule(nn.Module):
+class AimNet2SRInteractionModule(nn.Module):
     def __init__(
         self,
         number_of_per_atom_features: int,
@@ -443,8 +687,10 @@ class AIMNet2InteractionModule(nn.Module):
             self.number_of_input_features = (
                 number_of_per_atom_features  # radial_contributions_emb
                 + number_of_vector_features  # vector_contributions_emb
-                + number_of_per_atom_features  # radial_contributions_charge
-                + number_of_vector_features  # vector_contributions_charge
+                + number_of_per_atom_features  # radial_contributions_up
+                + number_of_vector_features  # vector_contributions_up
+                + number_of_per_atom_features  # radial_contributions_down (new)
+                + number_of_vector_features  # vector_contributions_down (new)
             )
         else:
             self.number_of_input_features = (
@@ -455,7 +701,7 @@ class AIMNet2InteractionModule(nn.Module):
         # Single MLP producing combined outputs
         self.mlp = mlp_init(
             n_in_features=self.number_of_input_features,
-            n_out_features=self.number_of_per_atom_features + 2,
+            n_out_features=self.number_of_per_atom_features + 3,
             activation_function=activation_function,
             hidden_layers=hidden_layers,
         )
@@ -600,7 +846,8 @@ class AIMNet2InteractionModule(nn.Module):
     def forward(
         self,
         atomic_embedding: Tensor,
-        partial_charges: Tensor,
+        partial_charge_up: Tensor,
+        partial_charge_down: Tensor,
         pair_indices: Tensor,
         gs: Tensor,
         gv: Tensor,
@@ -620,10 +867,9 @@ class AIMNet2InteractionModule(nn.Module):
         )
 
         if not self.is_first_module:
-            # Calculate contributions from charges
-            radial_contributions_charge, vector_contributions_charge = (
+            radial_contributions_up, vector_contributions_up = (
                 self.calculate_contributions(
-                    partial_charges,
+                    partial_charge_up,
                     pair_indices,
                     gs,
                     gv,
@@ -631,13 +877,28 @@ class AIMNet2InteractionModule(nn.Module):
                     calculate_vector_contributions=False,
                 )
             )
-            # Combine messages
+            # New: spin-down channel messages, computed exactly like the
+            # spin-up (formerly "charge") messages -- both channels of the
+            # spin-charge density propagate through the graph identically.
+            radial_contributions_down, vector_contributions_down = (
+                self.calculate_contributions(
+                    partial_charge_down,
+                    pair_indices,
+                    gs,
+                    gv,
+                    agh,
+                    calculate_vector_contributions=False,
+                )
+            )
+
             combined_message = torch.cat(
                 [
-                    radial_contributions_emb,  # (N, F_atom)
-                    vector_contributions_emb,  # (N, H)
-                    radial_contributions_charge,  # (N, 1)
-                    vector_contributions_charge,  # (N, H)
+                    radial_contributions_emb,
+                    vector_contributions_emb,
+                    radial_contributions_up,
+                    vector_contributions_up,
+                    radial_contributions_down,
+                    vector_contributions_down,
                 ],
                 dim=1,
             )
@@ -654,14 +915,14 @@ class AIMNet2InteractionModule(nn.Module):
         out = self.mlp(combined_message)
 
         # Split the output tensor into delta_q, f, and delta_a
-        delta_q, f, delta_a = torch.split(
-            out, [1, 1, self.number_of_per_atom_features], dim=1
+        delta_p_up, delta_p_down, f, delta_a = torch.split(
+            out, [1, 1, 1, self.number_of_per_atom_features], dim=1
         )
 
-        return delta_a, delta_q, f
+        return delta_a, delta_p_up, delta_p_down, f
 
 
-class AIMNet2Representation(nn.Module):
+class AimNet2SRRepresentation(nn.Module):
     def __init__(
         self,
         radial_cutoff: float,
@@ -669,7 +930,7 @@ class AIMNet2Representation(nn.Module):
         featurization_config: Dict[str, Dict[str, int]],
     ):
         """
-        Initialize the AIMNet2 representation layer.
+        Initialize the AimNet2SR representation layer.
 
         Parameters
         ----------

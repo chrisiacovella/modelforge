@@ -321,7 +321,6 @@ class FeaturizeInput(nn.Module):
 
         atomic_numbers = data.atomic_numbers
         categorial_embedding = self.atomic_number_embedding(atomic_numbers)
-
         if torch.isnan(categorial_embedding).any():
             print(f"categorial_embedding: {categorial_embedding}")
             print(categorial_embedding)
@@ -329,7 +328,6 @@ class FeaturizeInput(nn.Module):
 
         for additional_embedding in self.embeddings:
             categorial_embedding = additional_embedding(categorial_embedding, data)
-
         for append_embedding_vector in self.append_to_embedding_tensor:
             categorial_embedding = append_embedding_vector(categorial_embedding, data)
         return self.mixing(categorial_embedding)
