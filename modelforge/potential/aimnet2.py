@@ -99,10 +99,16 @@ class FukuiEquilibration(nn.Module):
 
         target_charge = per_system_total_charge.reshape(-1, 1).to(per_atom_charge.dtype)
 
+        # q_l = q_{l-1} + f_q * (Q_target - Q_pred).
+        # Here, Q is the total per system charge, and q is the partial charge.
+        # f_q is the learned matrix that distributes the difference between
+        # the labeled total charge and the predicted total charge to all atoms in the system
+
         residual_q = target_charge - q_sum
 
         # Redistribute residuals according to the *learned* Fukui weights
         # instead of uniformly across all atoms.
+
         corrected_charge = per_atom_charge + f_q * residual_q[atomic_subsystem_indices]
 
         return {"per_atom_charge": corrected_charge}
