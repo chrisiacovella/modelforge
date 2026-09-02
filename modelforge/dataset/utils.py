@@ -585,9 +585,12 @@ def calculate_size_of_splits(
     remainder = total_size - sum(subset_lengths)
 
     # add 1 to all the lengths in round-robin fashion until the remainder is 0
-    for i in range(remainder):
-        idx_to_add_at = i % len(subset_lengths)
-        subset_lengths[idx_to_add_at] += 1
+    # only do this if we do not want to enforce that we must sum to 1, otherwise we will end up just
+    # distributing the remainder to all subsets.
+    if enforce_sum_to_unity:
+        for i in range(remainder):
+            idx_to_add_at = i % len(subset_lengths)
+            subset_lengths[idx_to_add_at] += 1
 
     return subset_lengths
 

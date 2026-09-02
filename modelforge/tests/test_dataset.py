@@ -902,6 +902,10 @@ def test_size_of_splits():
     sizes = calculate_size_of_splits(
         total_size=total_size, split_frac=fractions, enforce_sum_to_unity=False
     )
+    # let us check that we do actually get what we expect
+
+    assert sum(sizes) == 7
+    assert np.all(np.array(sizes) == np.array([5, 1, 1]))
 
     # check to ensure that we still fail if we give splits that sum to more than 1, even with
     # enfore_sum_to_unity = false
@@ -954,6 +958,43 @@ def test_two_stage_random_splitting():
 
     assert not np.all(np.array(train_indices) == np.array(train_indices_2))
     assert not np.all(np.array(val_indices) == np.array(val_indices_2))
+
+    # now underallocate
+    total_size = 1000
+    split = [500, 100, 100]
+    first_split_seed = 42
+    second_split_seed = 123
+
+    # set up the rng for each split seed
+
+    train_indices, val_indices, test_indices = two_stage_random_split(
+        dataset_size=total_size,
+        split_size=split,
+        generator1=torch.Generator().manual_seed(first_split_seed),
+        generator2=torch.Generator().manual_seed(second_split_seed),
+        check_sum_to_dataset=False,
+    )
+
+    assert len(train_indices) == 500
+    assert len(val_indices) == 100
+    assert len(test_indices) == 100
+
+    with pytest.raises(ValueError):
+        train_indices, val_indices, test_indices = two_stage_random_split(
+            dataset_size=total_size,
+            split_size=split,
+            generator1=torch.Generator().manual_seed(first_split_seed),
+            generator2=torch.Generator().manual_seed(second_split_seed),
+            check_sum_to_dataset=True,
+        )
+    with pytest.raises(ValueError):
+        train_indices, val_indices, test_indices = two_stage_random_split(
+            dataset_size=total_size,
+            split_size=[800, 100, 100, 100],
+            generator1=torch.Generator().manual_seed(first_split_seed),
+            generator2=torch.Generator().manual_seed(second_split_seed),
+            check_sum_to_dataset=True,
+        )
 
 
 @pytest.mark.parametrize(
