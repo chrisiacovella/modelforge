@@ -2024,6 +2024,7 @@ class PotentialTrainer:
                 save_top_k=2,
                 monitor=self.training_parameter.monitor,
                 filename=checkpoint_filename,
+                save_last=True,
             )
         )
 
@@ -2114,6 +2115,7 @@ class PotentialTrainer:
                 if self.runtime_parameter.checkpoint_path != "None"
                 else None
             ),  # NOTE: automatically resumes training from checkpoint
+            weights_only=False,
         )
 
         self.trainer.validate(

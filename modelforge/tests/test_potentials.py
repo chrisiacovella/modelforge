@@ -617,15 +617,15 @@ def test_model_factory(potential_name, prep_temp_dir):
         potential_name.upper() in str(type(potential.core_network)).upper()
         or "JAX" in str(type(potential)).upper()
     )
-    potential = setup_potential_for_test(
-        use="inference",
-        potential_seed=42,
-        potential_name=potential_name,
-        simulation_environment="PyTorch",
-        jit=True,
-        use_default_dataset_statistic=False,
-        local_cache_dir=local_cache_dir,
-    )
+    # potential = setup_potential_for_test(
+    #     use="inference",
+    #     potential_seed=42,
+    #     potential_name=potential_name,
+    #     simulation_environment="PyTorch",
+    #     jit=True,
+    #     use_default_dataset_statistic=False,
+    #     local_cache_dir=local_cache_dir,
+    # )
 
     # trainers model
     trainer = setup_potential_for_test(
@@ -1029,6 +1029,8 @@ def test_forward_pass_with_all_datasets(
     assert torch.all(pair_list[0, 1:] >= pair_list[0, :-1])
 
 
+# skip this test as we will be removing jit in favor of compile
+@pytest.mark.skip("will be removing jit")
 @pytest.mark.parametrize(
     "potential_name", _Implemented_NNPs.get_all_neural_network_names()
 )
