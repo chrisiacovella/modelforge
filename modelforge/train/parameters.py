@@ -357,13 +357,12 @@ class TrainingParameters(ParametersBase):
         data_split: List[float]
         seed: int
         test_seed: Optional[int] = None
+        enforce_sum_to_unity: Optional[bool] = True
 
         @field_validator("data_split")
-        def data_split_must_sum_to_one_and_length_three(cls, v) -> List[float]:
+        def data_split_must_have_length_three(cls, v) -> List[float]:
             if len(v) != 3:
                 raise ValueError("data_split must have length of 3")
-            if sum(v) != 1:
-                raise ValueError("data_split must sum to 1")
             return v
 
     class StochasticWeightAveraging(ParametersBase):

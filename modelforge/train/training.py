@@ -1892,6 +1892,7 @@ class PotentialTrainer:
                 seed=self.training_parameter.splitting_strategy.seed,
                 split=self.training_parameter.splitting_strategy.data_split,
                 test_seed=self.training_parameter.splitting_strategy.test_seed,
+                enforce_sum_to_unity=self.training_parameter.splitting_strategy.enforce_sum_to_unity,
             ),
             properties_of_interest=self.dataset_parameter.properties_of_interest,
             properties_assignment=self.dataset_parameter.properties_assignment.model_dump(),
