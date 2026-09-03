@@ -308,8 +308,11 @@ class SplittingStrategy(ABC):
         self.val_indices: List[int] = []
         self.test_indices: List[int] = []
 
-        if enforce_sum_to_unity:
-            assert np.isclose(sum(split), 1.0), "Splits must sum to 1.0"
+        split_sum = sum(split)
+        if split_sum > 1.0 and not np.isclose(split_sum, 1.0):
+            raise ValueError(f"Splits ({split}) sum to more than 1.0")
+        if enforce_sum_to_unity and not np.isclose(split_sum, 1.0):
+            raise ValueError(f"Splits ({split}) do not sum to 1.0")
 
     @abstractmethod
     def split(self, dataset: "TorchDataset") -> Tuple[Subset, Subset, Subset]:
