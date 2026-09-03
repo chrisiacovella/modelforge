@@ -377,6 +377,7 @@ class TrainingParameters(ParametersBase):
                     raise ValueError(
                         f"sum of data_split must equal 1, got {sum(self.data_split)}"
                     )
+            return self
 
     class StochasticWeightAveraging(ParametersBase):
         """

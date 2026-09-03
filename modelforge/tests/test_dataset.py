@@ -1166,10 +1166,8 @@ def test_dataset_splitting(
         assert np.isclose(len(val_dataset2) / total, 0.3, atol=0.05)
         assert np.isclose(len(test_dataset2) / total, 0.1, atol=0.05)
 
-    try:
+    with pytest.raises(ValueError):
         splitting_strategy(split=[0.2, 0.1, 0.1])
-    except AssertionError as excinfo:
-        print(f"AssertionError raised: {excinfo}")
 
 
 # @pytest.mark.parametrize("dataset_name", _ImplementedDatasets.get_all_dataset_names())
