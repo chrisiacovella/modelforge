@@ -864,7 +864,9 @@ def test_size_of_splits():
 
     total_size = 100
     fractions = [0.8, 0.1, 0.1]
-    sizes = calculate_size_of_splits(total_size=total_size, split_frac=fractions)
+    sizes = calculate_size_of_splits(
+        total_size=total_size, split_frac=fractions, enforce_sum_to_unity=True
+    )
 
     assert sum(sizes) == total_size
     assert sizes == [80, 10, 10]
@@ -872,7 +874,9 @@ def test_size_of_splits():
     # if we cannot easily divide, we assign the remainders in a round robin fashion
     total_size = 103
     fractions = [0.8, 0.1, 0.1]
-    sizes = calculate_size_of_splits(total_size=total_size, split_frac=fractions)
+    sizes = calculate_size_of_splits(
+        total_size=total_size, split_frac=fractions, enforce_sum_to_unity=True
+    )
     assert sum(sizes) == total_size
     assert sizes == [83, 10, 10]
 
@@ -880,12 +884,37 @@ def test_size_of_splits():
     with pytest.raises(ValueError):
         total_size = 10
         fractions = [0.5, 0.3, 0.3]
-        sizes = calculate_size_of_splits(total_size=total_size, split_frac=fractions)
+        sizes = calculate_size_of_splits(
+            total_size=total_size, split_frac=fractions, enforce_sum_to_unity=True
+        )
 
     with pytest.raises(ValueError):
         total_size = 10
         fractions = [0.5, 0.1, 0.1]
-        sizes = calculate_size_of_splits(total_size=total_size, split_frac=fractions)
+        sizes = calculate_size_of_splits(
+            total_size=total_size, split_frac=fractions, enforce_sum_to_unity=True
+        )
+
+    # let us also test where we do not have enforce_sum_to_unity set to True
+    # this is should no longer fail
+    total_size = 10
+    fractions = [0.5, 0.1, 0.1]
+    sizes = calculate_size_of_splits(
+        total_size=total_size, split_frac=fractions, enforce_sum_to_unity=False
+    )
+    # let us check that we do actually get what we expect
+
+    assert sum(sizes) == 7
+    assert np.all(np.array(sizes) == np.array([5, 1, 1]))
+
+    # check to ensure that we still fail if we give splits that sum to more than 1, even with
+    # enforce_sum_to_unity = false
+    with pytest.raises(ValueError):
+        total_size = 10
+        fractions = [0.5, 0.1, 0.8]
+        sizes = calculate_size_of_splits(
+            total_size=total_size, split_frac=fractions, enforce_sum_to_unity=False
+        )
 
 
 def test_two_stage_random_splitting():
@@ -903,6 +932,7 @@ def test_two_stage_random_splitting():
         split_size=split,
         generator1=torch.Generator().manual_seed(first_split_seed),
         generator2=torch.Generator().manual_seed(second_split_seed),
+        check_sum_to_dataset=True,
     )
 
     # we want to check that every index is present in all of the splits
@@ -915,6 +945,7 @@ def test_two_stage_random_splitting():
         split_size=split,
         generator1=torch.Generator().manual_seed(first_split_seed),
         generator2=torch.Generator().manual_seed(456),
+        check_sum_to_dataset=True,
     )
 
     # test subsets should be identical
@@ -927,6 +958,43 @@ def test_two_stage_random_splitting():
 
     assert not np.all(np.array(train_indices) == np.array(train_indices_2))
     assert not np.all(np.array(val_indices) == np.array(val_indices_2))
+
+    # now underallocate
+    total_size = 1000
+    split = [500, 100, 100]
+    first_split_seed = 42
+    second_split_seed = 123
+
+    # set up the rng for each split seed
+
+    train_indices, val_indices, test_indices = two_stage_random_split(
+        dataset_size=total_size,
+        split_size=split,
+        generator1=torch.Generator().manual_seed(first_split_seed),
+        generator2=torch.Generator().manual_seed(second_split_seed),
+        check_sum_to_dataset=False,
+    )
+
+    assert len(train_indices) == 500
+    assert len(val_indices) == 100
+    assert len(test_indices) == 100
+
+    with pytest.raises(ValueError):
+        train_indices, val_indices, test_indices = two_stage_random_split(
+            dataset_size=total_size,
+            split_size=split,
+            generator1=torch.Generator().manual_seed(first_split_seed),
+            generator2=torch.Generator().manual_seed(second_split_seed),
+            check_sum_to_dataset=True,
+        )
+    with pytest.raises(ValueError):
+        train_indices, val_indices, test_indices = two_stage_random_split(
+            dataset_size=total_size,
+            split_size=[800, 100, 100, 100],
+            generator1=torch.Generator().manual_seed(first_split_seed),
+            generator2=torch.Generator().manual_seed(second_split_seed),
+            check_sum_to_dataset=True,
+        )
 
 
 @pytest.mark.parametrize(
@@ -1098,10 +1166,8 @@ def test_dataset_splitting(
         assert np.isclose(len(val_dataset2) / total, 0.3, atol=0.05)
         assert np.isclose(len(test_dataset2) / total, 0.1, atol=0.05)
 
-    try:
+    with pytest.raises(ValueError):
         splitting_strategy(split=[0.2, 0.1, 0.1])
-    except AssertionError as excinfo:
-        print(f"AssertionError raised: {excinfo}")
 
 
 # @pytest.mark.parametrize("dataset_name", _ImplementedDatasets.get_all_dataset_names())
