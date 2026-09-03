@@ -298,7 +298,7 @@ AimNET2-SR: how to define the postprocessing operations
 
 Aimnet2-SR has some subtle changes compared to the AimNet2 potential. Specifically, `per_atom_electrostatic_energy`is computed
 as part of the main interaction module, and summed into the `per_system_electrostatic_energy` by the `per_atom_energy`
-postprocessing operation (as above).This means we do not need a separate postprocessing computing operation, but do need to still
+postprocessing operation (as above). This means we do not need a separate postprocessing computing operation, but do need to still
 tell the `sum_per_system_energy` operation to include the `per_system_electrostatic_energy`.
 If the `per_system_electrostatic_energy` postprocessing is performed, it will overwrite the energy that comes from the
 interaction module (although, it will be computed using the partial charges that result from this interaction module).

@@ -628,13 +628,15 @@ def two_stage_random_split(
     Tuple[List[int], List[int], List[int]]
         A tuple containing three lists of indices for training, validation, and testing subsets, respectively.
     """
+
+    if sum(split_size) > dataset_size:
+        raise ValueError(f"Splits ({split_size}) exceed the total dataset size.")
+
     if len(split_size) != 3:
         raise ValueError("Split must be a list of three integers.")
-    if check_sum_to_dataset:
-        if not np.isclose(sum(split_size), dataset_size):
-            raise ValueError(
-                f"Splits ({split_size}) do not sum to the total dataset size."
-            )
+
+    if check_sum_to_dataset and not np.isclose(sum(split_size), dataset_size):
+        raise ValueError(f"Splits ({split_size}) do not sum to the total dataset size.")
 
     train_size, val_size, test_size = split_size
 

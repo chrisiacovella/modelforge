@@ -908,7 +908,7 @@ def test_size_of_splits():
     assert np.all(np.array(sizes) == np.array([5, 1, 1]))
 
     # check to ensure that we still fail if we give splits that sum to more than 1, even with
-    # enfore_sum_to_unity = false
+    # enforce_sum_to_unity = false
     with pytest.raises(ValueError):
         total_size = 10
         fractions = [0.5, 0.1, 0.8]
