@@ -533,6 +533,7 @@ class AimNet2SRCore(torch.nn.Module):
         """
         per_atom_electrostatic_energy = (
             0.5
+            * 138.96
             * partial_charges
             * spin_resolved_gaussian_smeared_potential(
                 d_ij,

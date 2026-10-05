@@ -179,7 +179,16 @@ class PostProcessing(torch.nn.Module):
         # however, it may be better to create a general energy summation that takes in a list of
         # the energies to sum (all would be per_system energies), allowing the other energy operations to
         # be performed in any order.
-
+        if "per_atom_energy" in properties_to_process:
+            self.registered_chained_operations["per_atom_energy"] = PerAtomEnergy(
+                postprocessing_parameter["per_atom_energy"],
+                dataset_statistic["training_dataset_statistics"],
+            )
+            self._registered_properties.append("per_atom_energy")
+            assert all(
+                prop in PostProcessing._SUPPORTED_PROPERTIES
+                for prop in self._registered_properties
+            )
         if "per_atom_charge" in properties_to_process:
             self.registered_chained_operations["per_atom_charge"] = PerAtomCharge(
                 postprocessing_parameter["per_atom_charge"]
@@ -254,16 +263,6 @@ class PostProcessing(torch.nn.Module):
                 )
             )
             self._registered_properties.append("per_system_vdw_energy")
-            assert all(
-                prop in PostProcessing._SUPPORTED_PROPERTIES
-                for prop in self._registered_properties
-            )
-        if "per_atom_energy" in properties_to_process:
-            self.registered_chained_operations["per_atom_energy"] = PerAtomEnergy(
-                postprocessing_parameter["per_atom_energy"],
-                dataset_statistic["training_dataset_statistics"],
-            )
-            self._registered_properties.append("per_atom_energy")
             assert all(
                 prop in PostProcessing._SUPPORTED_PROPERTIES
                 for prop in self._registered_properties
