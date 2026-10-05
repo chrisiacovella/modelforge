@@ -696,7 +696,7 @@ class CoulombPotential(torch.nn.Module):
         # Apply the cutoff function to pairwise distances
         phi_2r = self.cutoff_function(2 * pairwise_distances)
 
-        chi_r = phi_2r * (1 / torch.sqrt(pairwise_distances**2 + 1)) + (
+        chi_r = phi_2r * (1 / torch.sqrt(pairwise_distances**2 + 0.01)) + (
             1 - phi_2r
         ) * (1 / pairwise_distances)
 
