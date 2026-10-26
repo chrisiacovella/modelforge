@@ -2026,6 +2026,7 @@ def initialize_datamodule_from_config(
     local_cache_dir: Optional[str] = None,
     dataset_cache_dir: Optional[str] = None,
     local_yaml_file: Optional[str] = None,
+    batch_size: Optional[int] = None,
 ) -> DataModule:
     """
     Initialize a datamodule instance using the settings in the training config file
@@ -2050,6 +2051,8 @@ def initialize_datamodule_from_config(
         The local_yaml_file is used to specify a local dataset; this will point the code to the correct location
         of the file that specifies the dataset (in case this code is being run on a machine with different file structure
         than the machine where training was run).
+    batch_size: int, optional
+        Specify the batch size; note this will override any parameter set in the config_file
 
     Examples
     --------
@@ -2071,10 +2074,12 @@ def initialize_datamodule_from_config(
         dataset_cache_dir = dataset_parameter.dataset_cache_dir
     if local_yaml_file is None:
         local_yaml_file = dataset_parameter.local_yaml_file
+    if batch_size is None:
+        batch_size = training_parameter.batch_size
 
     dm = DataModule(
         name=dataset_parameter.dataset_name,
-        batch_size=training_parameter.batch_size,
+        batch_size=batch_size,
         remove_self_energies=training_parameter.remove_self_energies,
         shift_center_of_mass_to_origin=training_parameter.shift_center_of_mass_to_origin,
         shift_energies=training_parameter.shift_energies,
