@@ -1533,6 +1533,7 @@ def evaluate_batch(
     potential: Potential,
     subset: Literal["train", "test", "val"],
     include_metadata: bool = True,
+    device="cuda",
 ) -> dict:
     """
     This will evaluate the dataset subset using the specified potential.
@@ -1604,6 +1605,7 @@ def evaluate_batch(
     per_system_metadata_properties = []
 
     for batch in batches:
+        batch.to_device(device)
         output = potential(batch.nnp_input)
 
         # we'll need to parse the atomic_subsystem_indices
